@@ -736,8 +736,8 @@ func TestCloseNotDrainedChannel(t *testing.T) {
 	}
 
 	payload := "hello bob, I am alice"
-	// the internal channel buffer size is 2. So we should overflow it
-	for i := 0; i < 5; i++ {
+	// write more messages than the default peer queue holds so the queue overflows
+	for i := 0; i < defaultPeerQueueSize+5; i++ {
 		_, err = connAliceToBob.Write([]byte(payload))
 		if err != nil {
 			t.Fatalf("failed to write to channel: %s", err)
