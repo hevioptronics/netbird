@@ -35,6 +35,8 @@ const (
 	// envPeerQueueSize overrides defaultPeerQueueSize. Bursty UDP flows, for example a
 	// video keyframe of several hundred packets, need a larger queue than the default.
 	envPeerQueueSize = "NB_RELAY_PEER_QUEUE_SIZE"
+	// dropLogInterval limits how often writeMsg warns about a full peer queue.
+	dropLogInterval = 10 * time.Second
 )
 
 // peerQueueSizeFromEnv returns the per-peer queue size from NB_RELAY_PEER_QUEUE_SIZE, or
@@ -99,6 +101,13 @@ type connContainer struct {
 	closed      bool // flag to check if channel is closed
 	ctx         context.Context
 	cancel      context.CancelFunc
+
+	// dropped counts messages discarded because the queue was full. droppedLogged is
+	// the value of dropped at the last warning. Both, and lastDropLog, are guarded by
+	// msgChanLock.
+	dropped       uint64
+	droppedLogged uint64
+	lastDropLog   time.Time
 }
 
 func newConnContainer(log *log.Entry, c *Client, peerID messages.PeerID, instanceURL *RelayAddr) *connContainer {
@@ -149,6 +158,13 @@ func (cc *connContainer) writeMsg(msg Msg) {
 		msg.Free()
 	default:
 		msg.Free()
+		cc.dropped++
+		if now := time.Now(); now.Sub(cc.lastDropLog) >= dropLogInterval {
+			cc.log.Warnf("peer message queue full (%d), dropped %d messages, raise %s to buffer bursts",
+				cap(cc.messages), cc.dropped-cc.droppedLogged, envPeerQueueSize)
+			cc.droppedLogged = cc.dropped
+			cc.lastDropLog = now
+		}
 	}
 }
 
