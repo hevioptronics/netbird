@@ -7,6 +7,8 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -25,8 +27,30 @@ import (
 const (
 	bufferSize            = 8820
 	serverResponseTimeout = 8 * time.Second
-	connChannelSize       = 100
+
+	// defaultPeerQueueSize is the number of inbound messages buffered per relayed peer
+	// between the relay read loop and the peer's reader. Messages that arrive while the
+	// queue is full are dropped.
+	defaultPeerQueueSize = 100
+	// envPeerQueueSize overrides defaultPeerQueueSize. Bursty UDP flows, for example a
+	// video keyframe of several hundred packets, need a larger queue than the default.
+	envPeerQueueSize = "NB_RELAY_PEER_QUEUE_SIZE"
 )
+
+// peerQueueSizeFromEnv returns the per-peer queue size from NB_RELAY_PEER_QUEUE_SIZE, or
+// the default when the variable is unset or not a positive integer.
+func peerQueueSizeFromEnv() int {
+	v := os.Getenv(envPeerQueueSize)
+	if v == "" {
+		return defaultPeerQueueSize
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		log.Warnf("invalid %s value %q, using default %d", envPeerQueueSize, v, defaultPeerQueueSize)
+		return defaultPeerQueueSize
+	}
+	return n
+}
 
 var (
 	ErrConnAlreadyExists = fmt.Errorf("connection already exists")
@@ -79,7 +103,7 @@ type connContainer struct {
 
 func newConnContainer(log *log.Entry, c *Client, peerID messages.PeerID, instanceURL *RelayAddr) *connContainer {
 	ctx, cancel := context.WithCancel(context.Background())
-	msgChan := make(chan Msg, connChannelSize)
+	msgChan := make(chan Msg, c.peerQueueSize)
 	cn := &Conn{
 		dstID:       peerID,
 		messageChan: msgChan,
@@ -189,6 +213,9 @@ type Client struct {
 
 	mtu uint16
 
+	// peerQueueSize is the capacity of each relayed peer's inbound message queue.
+	peerQueueSize int
+
 	// transportFallback, when set, records datagram-too-large failures so a
 	// datagram-sized transport is avoided on subsequent connects. Shared via
 	// the manager.
@@ -240,6 +267,7 @@ func NewClientWithServerIP(serverURL string, serverIP netip.Addr, authTokenStore
 		authTokenStore: authTokenStore,
 		hashedID:       hashedID,
 		mtu:            mtu,
+		peerQueueSize:  peerQueueSizeFromEnv(),
 		bufPool: &sync.Pool{
 			New: func() any {
 				buf := make([]byte, bufferSize)
