@@ -37,3 +37,25 @@ func TestNewClientUsesEnvQueueSize(t *testing.T) {
 		t.Fatalf("cap(messages) = %d, want 7", cap(cc.messages))
 	}
 }
+
+func TestWriteMsgQueueFullDropsAndCounts(t *testing.T) {
+	t.Setenv(envPeerQueueSize, "3")
+	c := NewClient("rel://127.0.0.1:1", hmacTokenStore, "alice", 1280)
+	cc := newConnContainer(c.log, c, c.hashedID, nil)
+
+	newMsg := func() Msg {
+		bufPtr := c.bufPool.Get().(*[]byte)
+		return Msg{bufPool: c.bufPool, bufPtr: bufPtr, Payload: (*bufPtr)[:1]}
+	}
+
+	for i := 0; i < 5; i++ {
+		cc.writeMsg(newMsg())
+	}
+
+	if got := len(cc.messages); got != 3 {
+		t.Fatalf("queued = %d, want 3", got)
+	}
+	if got := cc.dropped; got != 2 {
+		t.Fatalf("dropped = %d, want 2", got)
+	}
+}
