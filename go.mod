@@ -148,7 +148,10 @@ require (
 	howett.net/plist v1.0.2-0.20250314012144-ee69052608d9
 )
 
-require golang.zx2c4.com/wireguard v0.0.0-20231211153847-12269c276173 // indirect
+require (
+	github.com/pion/transport/v4 v4.0.1 // indirect
+	golang.zx2c4.com/wireguard v0.0.0-20231211153847-12269c276173 // indirect
+)
 
 require (
 	cloud.google.com/go/auth v0.20.0 // indirect
@@ -311,7 +314,7 @@ require (
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
 	github.com/philhofer/fwd v1.2.0 // indirect
 	github.com/pion/dtls/v2 v2.2.10 // indirect
-	github.com/pion/dtls/v3 v3.0.9 // indirect
+	github.com/pion/dtls/v3 v3.1.4 // indirect
 	github.com/pion/mdns/v2 v2.0.7 // indirect
 	github.com/pion/transport/v2 v2.2.4 // indirect
 	github.com/pion/turn/v4 v4.1.1 // indirect
