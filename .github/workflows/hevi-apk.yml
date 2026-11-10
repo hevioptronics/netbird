@@ -1,0 +1,33 @@
+# hevi-apk builds the Alpine x86_64 apks of this branch for the Hevi videoserver.
+name: hevi-apk
+
+on:
+  push:
+    branches:
+      - "hevi/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build apks in alpine:3.24
+        run: |
+          mkdir -p out
+          docker run --rm -v "$PWD":/src:ro -v "$PWD/out":/out -w /src alpine:3.24 \
+            sh packaging/alpine/build.sh /out
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: netbird-apk-x86_64
+          path: out/*.apk
+          retention-days: 30
+          if-no-files-found: error
