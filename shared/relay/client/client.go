@@ -7,6 +7,8 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -25,8 +27,44 @@ import (
 const (
 	bufferSize            = 8820
 	serverResponseTimeout = 8 * time.Second
-	connChannelSize       = 100
+
+	// defaultPeerQueueSize is the number of inbound messages buffered per relayed peer
+	// between the relay read loop and the peer's reader. Messages that arrive while the
+	// queue is full are dropped.
+	defaultPeerQueueSize = 100
+	// envPeerQueueSize overrides defaultPeerQueueSize. Bursty UDP flows, for example a
+	// video keyframe of several hundred packets, need a larger queue than the default.
+	envPeerQueueSize = "NB_RELAY_PEER_QUEUE_SIZE"
+	// maxPeerQueueSize caps envPeerQueueSize. Each queued message holds a bufferSize
+	// buffer, so a full queue of this size uses about 580 MB per peer.
+	maxPeerQueueSize = 65536
+	// dropLogInterval limits how often writeMsg warns about a full peer queue.
+	dropLogInterval = 10 * time.Second
 )
+
+// peerQueueSizeFromEnv returns the per-peer queue size from NB_RELAY_PEER_QUEUE_SIZE, or
+// the default when the variable is unset or not a positive integer. Surrounding
+// whitespace is ignored. Values above maxPeerQueueSize are capped.
+func peerQueueSizeFromEnv() int {
+	v := strings.TrimSpace(os.Getenv(envPeerQueueSize))
+	if v == "" {
+		return defaultPeerQueueSize
+	}
+	n, err := strconv.Atoi(v)
+	if errors.Is(err, strconv.ErrRange) && n > 0 {
+		// Atoi returns the largest int for a positive value beyond int range.
+		err = nil
+	}
+	if err != nil || n <= 0 {
+		log.Warnf("invalid %s value %q, using default %d", envPeerQueueSize, v, defaultPeerQueueSize)
+		return defaultPeerQueueSize
+	}
+	if n > maxPeerQueueSize {
+		log.Warnf("%s value %s is above the maximum, using %d", envPeerQueueSize, v, maxPeerQueueSize)
+		return maxPeerQueueSize
+	}
+	return n
+}
 
 var (
 	ErrConnAlreadyExists = fmt.Errorf("connection already exists")
@@ -81,11 +119,20 @@ type connContainer struct {
 	closed      bool // flag to check if channel is closed
 	ctx         context.Context
 	cancel      context.CancelCauseFunc
+
+	// dropped counts messages discarded because the queue was full. droppedReported is
+	// the part of dropped already logged with a count. lastDropLog is the time of the
+	// last warning, read from now. dropped, droppedReported and lastDropLog are guarded
+	// by msgChanLock.
+	dropped         uint64
+	droppedReported uint64
+	lastDropLog     time.Time
+	now             func() time.Time
 }
 
 func newConnContainer(log *log.Entry, c *Client, peerID messages.PeerID, instanceURL *RelayAddr) *connContainer {
 	ctx, cancel := context.WithCancelCause(context.Background())
-	msgChan := make(chan Msg, connChannelSize)
+	msgChan := make(chan Msg, c.peerQueueSize)
 	cn := &Conn{
 		dstID:       peerID,
 		messageChan: msgChan,
@@ -93,11 +140,12 @@ func newConnContainer(log *log.Entry, c *Client, peerID messages.PeerID, instanc
 		ctx:         ctx,
 	}
 	cc := &connContainer{
-		log:      log,
+		log:      log.WithField("peer_id", peerID.String()),
 		conn:     cn,
 		messages: msgChan,
 		ctx:      ctx,
 		cancel:   cancel,
+		now:      time.Now,
 	}
 
 	// bind conn to client
@@ -128,7 +176,37 @@ func (cc *connContainer) writeMsg(msg Msg) {
 		msg.Free()
 	default:
 		msg.Free()
+		cc.dropped++
+		cc.warnDrop()
 	}
+}
+
+// warnDrop logs at most one warning per dropLogInterval. The first drop after a quiet
+// interval logs that dropping started; a later drop logs the count of unreported drops.
+// The caller holds msgChanLock.
+func (cc *connContainer) warnDrop() {
+	now := cc.now()
+	if now.Sub(cc.lastDropLog) < dropLogInterval {
+		return
+	}
+	cc.lastDropLog = now
+	if cc.dropped-cc.droppedReported == 1 {
+		cc.log.Warnf("peer message queue full (%d), dropping messages, raise %s to buffer bursts",
+			cap(cc.messages), envPeerQueueSize)
+		return
+	}
+	cc.reportDrops()
+}
+
+// reportDrops logs the count of unreported drops, if any. The caller holds msgChanLock.
+func (cc *connContainer) reportDrops() {
+	n := cc.dropped - cc.droppedReported
+	if n == 0 {
+		return
+	}
+	cc.log.Warnf("peer message queue full (%d), dropped %d messages, raise %s to buffer bursts",
+		cap(cc.messages), n, envPeerQueueSize)
+	cc.droppedReported = cc.dropped
 }
 
 func (cc *connContainer) close(cause error) {
@@ -147,6 +225,7 @@ func (cc *connContainer) close(cause error) {
 	for msg := range cc.messages {
 		msg.Free()
 	}
+	cc.reportDrops()
 }
 
 // transportConn is implemented by relay connections that know their transport.
@@ -191,6 +270,9 @@ type Client struct {
 	stateSubscription *PeersStateSubscription
 
 	mtu uint16
+
+	// peerQueueSize is the capacity of each relayed peer's inbound message queue.
+	peerQueueSize int
 
 	// transportFallback, when set, records datagram-too-large failures so a
 	// datagram-sized transport is avoided on subsequent connects. Shared via
@@ -243,6 +325,7 @@ func NewClientWithServerIP(serverURL string, serverIP netip.Addr, authTokenStore
 		authTokenStore: authTokenStore,
 		hashedID:       hashedID,
 		mtu:            mtu,
+		peerQueueSize:  peerQueueSizeFromEnv(),
 		bufPool: &sync.Pool{
 			New: func() any {
 				buf := make([]byte, bufferSize)

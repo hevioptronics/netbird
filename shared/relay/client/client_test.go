@@ -13,6 +13,7 @@ import (
 	"github.com/netbirdio/netbird/client/iface"
 	"github.com/netbirdio/netbird/shared/relay/auth/allow"
 	"github.com/netbirdio/netbird/shared/relay/auth/hmac"
+	"github.com/netbirdio/netbird/shared/relay/messages"
 	"github.com/netbirdio/netbird/util"
 
 	"github.com/netbirdio/netbird/relay/server"
@@ -671,6 +672,7 @@ func TestCloseByClient(t *testing.T) {
 }
 
 func TestCloseNotDrainedChannel(t *testing.T) {
+	t.Setenv(envPeerQueueSize, "")
 	ctx := context.Background()
 	serverListenAddr := "127.0.0.1:51001"
 	serverCfg := newClientTestServerConfig(serverListenAddr)
@@ -736,8 +738,8 @@ func TestCloseNotDrainedChannel(t *testing.T) {
 	}
 
 	payload := "hello bob, I am alice"
-	// the internal channel buffer size is 2. So we should overflow it
-	for i := 0; i < 5; i++ {
+	// write more messages than the default peer queue holds so the queue overflows
+	for i := 0; i < defaultPeerQueueSize+5; i++ {
 		_, err = connAliceToBob.Write([]byte(payload))
 		if err != nil {
 			t.Fatalf("failed to write to channel: %s", err)
@@ -747,10 +749,26 @@ func TestCloseNotDrainedChannel(t *testing.T) {
 
 	// wait for delivery
 	time.Sleep(1 * time.Second)
+	if dropped := droppedFrom(clientBob, idAlice); dropped == 0 {
+		t.Fatalf("Bob's queue for Alice did not overflow")
+	}
 	err = connBobToAlice.Close()
 	if err != nil {
 		t.Errorf("failed to close channel: %s", err)
 	}
+}
+
+// droppedFrom returns the number of messages from peer that c dropped on a full queue.
+func droppedFrom(c *Client, peer string) uint64 {
+	c.mu.Lock()
+	container := c.conns[messages.HashID(peer)]
+	c.mu.Unlock()
+	if container == nil {
+		return 0
+	}
+	container.msgChanLock.Lock()
+	defer container.msgChanLock.Unlock()
+	return container.dropped
 }
 
 func waitForServerToStart(errChan chan error) error {
