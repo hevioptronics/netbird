@@ -2,9 +2,10 @@
 # build.sh builds the netbird apks with abuild in an Alpine container.
 #
 # Run it as root from the repository root, for example:
-#   docker run --rm -v "$PWD":/src:ro -v "$PWD/out":/out -w /src alpine:3.24 \
+#   docker run --rm --platform linux/amd64 -v "$PWD":/src:ro -v "$PWD/out":/out -w /src \
+#     alpine@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf \
 #     sh packaging/alpine/build.sh /out
-# The apks are signed with a throwaway key generated here.
+# The image is alpine:3.24. The apks are signed with a throwaway key generated here.
 set -eu
 
 out=$1
