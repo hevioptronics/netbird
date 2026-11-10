@@ -120,12 +120,14 @@ type connContainer struct {
 	ctx         context.Context
 	cancel      context.CancelCauseFunc
 
-	// dropped counts messages discarded because the queue was full. droppedLogged is
-	// the value of dropped at the last warning. Both, and lastDropLog, are guarded by
-	// msgChanLock.
-	dropped       uint64
-	droppedLogged uint64
-	lastDropLog   time.Time
+	// dropped counts messages discarded because the queue was full. droppedReported is
+	// the part of dropped already logged with a count. lastDropLog is the time of the
+	// last warning, read from now. dropped, droppedReported and lastDropLog are guarded
+	// by msgChanLock.
+	dropped         uint64
+	droppedReported uint64
+	lastDropLog     time.Time
+	now             func() time.Time
 }
 
 func newConnContainer(log *log.Entry, c *Client, peerID messages.PeerID, instanceURL *RelayAddr) *connContainer {
@@ -138,11 +140,12 @@ func newConnContainer(log *log.Entry, c *Client, peerID messages.PeerID, instanc
 		ctx:         ctx,
 	}
 	cc := &connContainer{
-		log:      log,
+		log:      log.WithField("peer_id", peerID.String()),
 		conn:     cn,
 		messages: msgChan,
 		ctx:      ctx,
 		cancel:   cancel,
+		now:      time.Now,
 	}
 
 	// bind conn to client
@@ -174,13 +177,36 @@ func (cc *connContainer) writeMsg(msg Msg) {
 	default:
 		msg.Free()
 		cc.dropped++
-		if now := time.Now(); now.Sub(cc.lastDropLog) >= dropLogInterval {
-			cc.log.Warnf("peer message queue full (%d), dropped %d messages, raise %s to buffer bursts",
-				cap(cc.messages), cc.dropped-cc.droppedLogged, envPeerQueueSize)
-			cc.droppedLogged = cc.dropped
-			cc.lastDropLog = now
-		}
+		cc.warnDrop()
 	}
+}
+
+// warnDrop logs at most one warning per dropLogInterval. The first drop after a quiet
+// interval logs that dropping started; a later drop logs the count of unreported drops.
+// The caller holds msgChanLock.
+func (cc *connContainer) warnDrop() {
+	now := cc.now()
+	if now.Sub(cc.lastDropLog) < dropLogInterval {
+		return
+	}
+	cc.lastDropLog = now
+	if cc.dropped-cc.droppedReported == 1 {
+		cc.log.Warnf("peer message queue full (%d), dropping messages, raise %s to buffer bursts",
+			cap(cc.messages), envPeerQueueSize)
+		return
+	}
+	cc.reportDrops()
+}
+
+// reportDrops logs the count of unreported drops, if any. The caller holds msgChanLock.
+func (cc *connContainer) reportDrops() {
+	n := cc.dropped - cc.droppedReported
+	if n == 0 {
+		return
+	}
+	cc.log.Warnf("peer message queue full (%d), dropped %d messages, raise %s to buffer bursts",
+		cap(cc.messages), n, envPeerQueueSize)
+	cc.droppedReported = cc.dropped
 }
 
 func (cc *connContainer) close(cause error) {
@@ -199,6 +225,7 @@ func (cc *connContainer) close(cause error) {
 	for msg := range cc.messages {
 		msg.Free()
 	}
+	cc.reportDrops()
 }
 
 // transportConn is implemented by relay connections that know their transport.
