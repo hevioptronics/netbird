@@ -43,20 +43,24 @@ const (
 )
 
 // peerQueueSizeFromEnv returns the per-peer queue size from NB_RELAY_PEER_QUEUE_SIZE, or
-// the default when the variable is unset or not a positive integer. Values above
-// maxPeerQueueSize are capped.
+// the default when the variable is unset or not a positive integer. Surrounding
+// whitespace is ignored. Values above maxPeerQueueSize are capped.
 func peerQueueSizeFromEnv() int {
-	v := os.Getenv(envPeerQueueSize)
+	v := strings.TrimSpace(os.Getenv(envPeerQueueSize))
 	if v == "" {
 		return defaultPeerQueueSize
 	}
 	n, err := strconv.Atoi(v)
+	if errors.Is(err, strconv.ErrRange) && n > 0 {
+		// Atoi returns the largest int for a positive value beyond int range.
+		err = nil
+	}
 	if err != nil || n <= 0 {
 		log.Warnf("invalid %s value %q, using default %d", envPeerQueueSize, v, defaultPeerQueueSize)
 		return defaultPeerQueueSize
 	}
 	if n > maxPeerQueueSize {
-		log.Warnf("%s value %d is above the maximum, using %d", envPeerQueueSize, n, maxPeerQueueSize)
+		log.Warnf("%s value %s is above the maximum, using %d", envPeerQueueSize, v, maxPeerQueueSize)
 		return maxPeerQueueSize
 	}
 	return n
