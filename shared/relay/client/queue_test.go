@@ -15,6 +15,8 @@ func TestPeerQueueSizeFromEnv(t *testing.T) {
 		{name: "not a number uses default", env: "big", want: defaultPeerQueueSize},
 		{name: "zero uses default", env: "0", want: defaultPeerQueueSize},
 		{name: "negative uses default", env: "-5", want: defaultPeerQueueSize},
+		{name: "max is kept", env: "65536", want: 65536},
+		{name: "above max is capped", env: "1000000000", want: 65536},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
