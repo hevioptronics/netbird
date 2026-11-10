@@ -5,8 +5,8 @@
 #   docker run --rm --platform linux/amd64 -v "$PWD":/src:ro -v "$PWD/out":/out -w /src \
 #     alpine@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf \
 #     sh packaging/alpine/build.sh /out
-# The image is alpine:3.24. The apks hold the committed tree at HEAD and are signed
-# with a throwaway key generated here.
+# The image is alpine:3.24. The apks hold the committed tree at HEAD, record its commit
+# in .PKGINFO and are signed with a throwaway key generated here.
 set -eu
 
 out=$1
@@ -21,11 +21,15 @@ mkdir -p /home/builder/netbird
 # The copy keeps .git: APKBUILD prepare() reads HEAD from it.
 tar -cf - --exclude=./out . | tar -C /home/builder/netbird -xf -
 chown -R builder:builder /home/builder/netbird
+commit=$(su builder -c 'git -C ~/netbird rev-parse HEAD')
 
 su builder -c 'abuild-keygen -a -n'
 # abuild indexes the repository and needs to trust its own key for that.
 cp /home/builder/.abuild/*.rsa.pub /etc/apk/keys/
-su builder -c 'cd ~/netbird/packaging/alpine && REPODEST=~/packages abuild -r'
+# abuild would record the last commit of packaging/alpine; record HEAD instead.
+su builder -c "cd ~/netbird/packaging/alpine && \
+	ABUILD_LAST_COMMIT=$commit PACKAGER='HEVI CI <noreply@hevioptronics.com>' \
+	REPODEST=~/packages abuild -r"
 
 mkdir -p "$out"
 find /home/builder/packages -name '*.apk' -exec cp {} "$out"/ \;

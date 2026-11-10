@@ -28,9 +28,15 @@ jobs:
           docker run --rm --platform linux/amd64 -v "$PWD":/src:ro -v "$PWD/out":/out -w /src \
             "$ALPINE_IMAGE" sh packaging/alpine/build.sh /out
 
+      - name: Name the artifact
+        id: artifact
+        run: |
+          pkgver=$(sed -n 's/^pkgver=//p' packaging/alpine/APKBUILD)
+          echo "name=netbird-$pkgver-$(git rev-parse --short=8 HEAD)-x86_64" >> "$GITHUB_OUTPUT"
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: netbird-apk-x86_64
+          name: ${{ steps.artifact.outputs.name }}
           path: out/*.apk
           retention-days: 30
           if-no-files-found: error
