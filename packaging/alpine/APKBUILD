@@ -1,0 +1,69 @@
+# Contributor: Hevi Optronics
+# Client-only build of community/netbird (aports 3.24-stable) from this checkout.
+pkgname=netbird
+pkgver=0.82.1_p1
+pkgrel=0
+# _nbver is the upstream release; netbird reports it as its version.
+_nbver=${pkgver%_p*}
+pkgdesc="WireGuard-based overlay network and mesh VPN"
+url="https://netbird.io/"
+arch="x86_64"
+license="BSD-3-Clause"
+options="net !check" # tests require root
+depends="openresolv"
+makedepends="go"
+subpackages="
+$pkgname-doc
+$pkgname-openrc
+$pkgname-bash-completion
+$pkgname-fish-completion
+$pkgname-zsh-completion
+"
+install="$pkgname.pre-install"
+source="
+unix-socket-permissions.patch
+netbird.initd
+netbird.confd
+"
+# _srcroot is the repository checkout that holds this APKBUILD.
+_srcroot="$startdir/../.."
+builddir="$srcdir/$pkgname-$_nbver"
+
+prepare() {
+	mkdir -p "$builddir"
+	tar -C "$_srcroot" -cf - \
+		--exclude=.git \
+		--exclude=packaging/alpine/src \
+		--exclude=packaging/alpine/pkg \
+		. | tar -C "$builddir" -xf -
+	default_prepare
+}
+
+build() {
+	mkdir -p build
+	go build -v -o build \
+		-ldflags "-X github.com/netbirdio/netbird/version.version=$_nbver -extldflags \"$LDFLAGS\"" \
+		./client
+}
+
+package() {
+	install -Dm0755 build/client "$pkgdir"/usr/bin/netbird
+	install -Dm0644 LICENSE "$pkgdir"/usr/share/licenses/$pkgname/LICENSE
+
+	install -Dm0755 "$srcdir"/netbird.initd "$pkgdir"/etc/init.d/netbird
+	install -Dm0644 "$srcdir"/netbird.confd "$pkgdir"/etc/conf.d/netbird
+
+	local bashdir="$pkgdir"/usr/share/bash-completion/completions
+	local fishdir="$pkgdir"/usr/share/fish/vendor_completions.d
+	local zshdir="$pkgdir"/usr/share/zsh/site-functions
+	mkdir -p "$bashdir" "$fishdir" "$zshdir"
+	"$pkgdir"/usr/bin/netbird completion bash >"$bashdir"/netbird
+	"$pkgdir"/usr/bin/netbird completion fish >"$fishdir"/netbird.fish
+	"$pkgdir"/usr/bin/netbird completion zsh >"$zshdir"/_netbird
+}
+
+sha512sums="
+c4199b3ff07cfd4dddeef4e66504b5ff38711abb8a6c3a16cad090fe8e69314921e86b5bb7f6795cd0e0c7470184ebe7c3c5db86c4b73e95aec403ac32bf218d  unix-socket-permissions.patch
+a71c8e4d0e625fb3cc8d7aac64d1d6a93e56dc2b811058e079c39cd37bfe9aa0b914478a3028171a561b0f0a75ac000190d2b0dff2759aab08985b67e717e625  netbird.initd
+30f2a2248a1e1f77a7a545df8261b1b1b384816edbf1fae9b38967267f924b76307852d852415f00eed80bb406202c943fe26282484af3c06f65ec176b84d68d  netbird.confd
+"
