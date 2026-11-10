@@ -11,7 +11,7 @@ arch="x86_64"
 license="BSD-3-Clause"
 options="net !check" # tests require root
 depends="openresolv"
-makedepends="go"
+makedepends="git go"
 subpackages="
 $pkgname-doc
 $pkgname-openrc
@@ -31,11 +31,8 @@ builddir="$srcdir/$pkgname-$_nbver"
 
 prepare() {
 	mkdir -p "$builddir"
-	tar -C "$_srcroot" -cf - \
-		--exclude=.git \
-		--exclude=packaging/alpine/src \
-		--exclude=packaging/alpine/pkg \
-		. | tar -C "$builddir" -xf -
+	# Build the committed tree at HEAD, so untracked and changed files stay out.
+	git -C "$_srcroot" archive --format=tar HEAD | tar -C "$builddir" -xf -
 	default_prepare
 }
 
