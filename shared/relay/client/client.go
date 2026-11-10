@@ -35,12 +35,16 @@ const (
 	// envPeerQueueSize overrides defaultPeerQueueSize. Bursty UDP flows, for example a
 	// video keyframe of several hundred packets, need a larger queue than the default.
 	envPeerQueueSize = "NB_RELAY_PEER_QUEUE_SIZE"
+	// maxPeerQueueSize caps envPeerQueueSize. Each queued message holds a bufferSize
+	// buffer, so a full queue of this size uses about 580 MB per peer.
+	maxPeerQueueSize = 65536
 	// dropLogInterval limits how often writeMsg warns about a full peer queue.
 	dropLogInterval = 10 * time.Second
 )
 
 // peerQueueSizeFromEnv returns the per-peer queue size from NB_RELAY_PEER_QUEUE_SIZE, or
-// the default when the variable is unset or not a positive integer.
+// the default when the variable is unset or not a positive integer. Values above
+// maxPeerQueueSize are capped.
 func peerQueueSizeFromEnv() int {
 	v := os.Getenv(envPeerQueueSize)
 	if v == "" {
@@ -50,6 +54,10 @@ func peerQueueSizeFromEnv() int {
 	if err != nil || n <= 0 {
 		log.Warnf("invalid %s value %q, using default %d", envPeerQueueSize, v, defaultPeerQueueSize)
 		return defaultPeerQueueSize
+	}
+	if n > maxPeerQueueSize {
+		log.Warnf("%s value %d is above the maximum, using %d", envPeerQueueSize, n, maxPeerQueueSize)
+		return maxPeerQueueSize
 	}
 	return n
 }
